@@ -34,7 +34,7 @@ module Network.Nanomsg
         -- ** Other
         , Socket
         , Endpoint
-        , NNException
+        , NNException(..)
         , SocketType
         , Sender
         , Receiver
@@ -45,6 +45,7 @@ module Network.Nanomsg
         , bind
         , connect
         , send
+		, send'
         , recv
         , recv'
         , subscribe
@@ -239,22 +240,31 @@ instance Receiver Bus
 -- and strerror functions for the posix ones.
 
 -- | Pretty much any error condition throws this exception.
-data NNException = NNException String
-        deriving (Eq, Show, Typeable)
+data NNException = NNException 
+	{ nnErrno :: Int 
+	, nnLocat :: String
+	, nnMsg   :: String
+	} deriving (Eq, Ord, Typeable)
 
 instance Exception NNException
 
-mkErrorString :: String -> IO String
-mkErrorString loc = do
+instance Show NNException where
+	show (NNException no loc msg)  =   
+		printf "nanomsg-haskell error at %s. Errno %d: %s" loc no msg
+
+mkNNException :: String -> IO NNException
+mkNNException loc = do
     errNo <- c_nn_errno
     errCString <- c_nn_strerror errNo
     errString <- peekCString errCString
-    return $ printf "nanomsg-haskell error at %s. Errno %d: %s" loc (fromIntegral errNo :: Int) errString
+    return $ NNException (fromIntegral errNo :: Int) loc
+		   $ printf "nanomsg-haskell error at %s. Errno %d: %s" 
+		   			loc (fromIntegral errNo :: Int) errString
 
 throwErrno :: String -> IO a
 throwErrno loc = do
-    s <- mkErrorString loc
-    throwIO $ NNException s
+    e <- mkNNException loc
+    throwIO e
 
 throwErrnoIf :: (a -> Bool) -> String -> IO a -> IO a
 throwErrnoIf p loc action = do
@@ -459,6 +469,14 @@ send (Socket t sid) string =
             "send"
             (c_nn_send sid ptr (fromIntegral len) (#const NN_DONTWAIT))
             (getOptionFd (Socket t sid) (#const NN_SNDFD) >>= threadWaitWrite)
+
+-- | Non-blocking function for sending a message
+send' :: Sender a => Socket a -> ByteString -> IO ()
+send' (Socket t sid) string =
+	U.unsafeUseAsCStringLen string $ \(ptr, len) ->
+		throwErrnoIfMinus1_ "send"
+			(c_nn_send sid ptr (fromIntegral len) (#const NN_DONTWAIT))
+		
 
 -- | Blocking receive.
 recv :: Receiver a => Socket a -> IO ByteString
